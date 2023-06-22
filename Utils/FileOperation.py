@@ -24,11 +24,16 @@ def ExecTryCmd(cmd):
     except:
         pass
 
+def fileExist(path):
+    return os.path.exists(path)
+
 def mkdir(directory):
-    ExecTryCmd('mkdir ' + directory)
+    if not fileExist(directory):
+        ExecTryCmd('mkdir ' + directory)
 
 def rm(directory, r=False):
-    ExecTryCmd(('rm -r ' if r else 'rm ') + directory)
+    if fileExist(directory):
+        ExecTryCmd(('rm -r ' if r else 'rm ') + directory)
 
 def mv(src, dst):
     ExecTryCmd('mv ' + src + ' ' + dst)

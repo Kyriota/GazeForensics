@@ -4,6 +4,7 @@ import threading
 import json
 import cv2
 import numpy as np
+from time import sleep
 # from PIL import Image
 
 
@@ -11,8 +12,10 @@ import numpy as np
 def ClipTrainDatasetParallel(
         json_path,
         output_path,
+        output_lock,
         thread_num=4,
-        utilization_percentage=1.0
+        utilization_percentage=1.0,
+        epoch=None,
     ):
     '''
     Fire several sub threads to clip the train dataset into clips.
@@ -32,6 +35,7 @@ def ClipTrainDatasetParallel(
             half_total_len += i['split_num']
         residual = half_total_len - int(half_total_len * utilization_percentage)
         # Shuffle the fake_train and real_train
+        np.random.seed(int(utilization_percentage * 1e6) + epoch)
         np.random.shuffle(vid_category_dict['fake_train'])
         np.random.shuffle(vid_category_dict['real_train'])
         for _ in range(residual):
@@ -67,8 +71,11 @@ def ClipTrainDatasetParallel(
     mkdir(output_path)
     
     # Start sub threads
+    output_lock.acquire()
     for i in range(thread_num):
         sub_threads[i].start()
+        sleep(0.1)
+    output_lock.release()
 
     # Wait for sub threads to finish
     for i in range(thread_num):
@@ -101,7 +108,7 @@ def ClipTrainDataset(
     for i in vid_category_dict['real_train']:
         total_len += i['split_num']
     progress_bar = ProgressBar(
-        'green',
+        'blue',
         'Clipping',
         total_len
     )
@@ -153,7 +160,7 @@ def ClipTrainDataset(
             for i in range(split_num):
                 vid_name = vid_path.split('/')
                 vid_name = vid_name[-2] + '_' + vid_name[-1].split('.')[0] + '_' + str(i) + '.mp4'
-                new_vid_path = output_path + '/' + vid_category_key + '/' + vid_name
+                new_vid_path = output_path + vid_category_key + '/' + vid_name
                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                 out_size = (frames_list[i][0].shape[1], frames_list[i][0].shape[0])
                 out = cv2.VideoWriter(new_vid_path, fourcc, 30.0, out_size)
@@ -164,8 +171,7 @@ def ClipTrainDataset(
             # Update progress bar
             progress_bar.Update(
                 ' * Now processing ' + vid_path + \
-                '<br>' + ' * Saving to ' + output_path + '/' + vid_category_key + '/' + vid_name + \
-                '<br>' + ' * Progress: ' + str(progress_bar.progress+1) + '/' + str(progress_bar.total_len),
+                '<br>' + ' * Saving to ' + output_path + vid_category_key + '/' + vid_name,
                 increment=split_num
             )
 
@@ -240,7 +246,7 @@ def ClipTestDataset(
                     
                     vid_name = vid_path.split('/')
                     vid_name = vid_name[-2] + '_' + vid_name[-1].split('.')[0] + '_' + str(serial_num) + '.mp4'
-                    new_vid_path = output_path + '/' + vid_category_key + '/' + vid_name
+                    new_vid_path = output_path + vid_category_key + '/' + vid_name
                     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                     out_size = (temp_frames[0].shape[1], temp_frames[0].shape[0])
                     out = cv2.VideoWriter(new_vid_path, fourcc, 30.0, out_size)

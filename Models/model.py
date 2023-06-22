@@ -31,42 +31,55 @@ class FC_block(nn.Module):
 
 
 class GazeForensics(nn.Module):
-    def __init__(self, leaky=0, save_mid_layer=False, save_last_layer=False):
+    def __init__(self, leaky=0, save_backend_output=False, arch='resnet18'):
         nn.Module.__init__(self)
 
         self.leaky = leaky
-        self.save_last_layer = save_last_layer
+        self.save_backend_output = save_backend_output
 
-        self.base_model = resnet18(pretrained=True, save_mid_layer=save_mid_layer)
-        self.base_model.fc2 = nn.Linear(1000, 256 + leaky)
+        if arch == 'resnet18':
+            self.base_model = resnet18(pretrained=True)
+            self.avg_size = 512
+        elif arch == 'resnet50':
+            self.base_model = resnet50(pretrained=True)
+            self.avg_size = 2048
+        else:
+            raise NotImplementedError
+        
+        self.emb_dim = 2048
+        self.MHA_dim = 256
+        self.fpc = 14 # frames per clip
+        self.base_fc = FC_block(self.avg_size, self.emb_dim + self.leaky, mid_sizes=[1024, 1024])
 
-        self.MHA_Q_fc = FC_block(512 + leaky, 256, mid_sizes=[320])
-        self.MHA_K_fc = FC_block(512 + leaky, 256, mid_sizes=[320])
-        self.MHA_V_fc = FC_block(512 + leaky, 256, mid_sizes=[320])
-        self.multihead_attn = nn.MultiheadAttention(256, 4, batch_first=True)
+        self.MHA_Q_fc = FC_block(self.emb_dim + self.leaky, self.MHA_dim, mid_sizes=[320])
+        self.MHA_K_fc = FC_block(self.emb_dim + self.leaky, self.MHA_dim, mid_sizes=[320])
+        self.MHA_V_fc = FC_block(self.emb_dim + self.leaky, self.MHA_dim, mid_sizes=[320])
+        self.multihead_attn = nn.MultiheadAttention(self.MHA_dim, 4, batch_first=True)
 
-        self.last_fc = FC_block(256, 2, mid_sizes=[128, 64])
+        self.last_fc = FC_block(self.MHA_dim, 2, mid_sizes=[128, 64])
 
         self.activation = nn.ReLU()
 
-        self.IOP = {}
+        self.backend_out = None
 
 
     def forward(self, input):
-        backendOut = self.base_model(input.view((input.size(0) * 14, 3) + input.size()[-2:]))
-        if self.save_last_layer:
-            self.IOP[self.base_model] = backendOut[:, :512]
-        backendOut = backendOut.view(input.size(0), 14, 256 + self.leaky)
+        backendOut = self.base_model(input.view((input.size(0) * self.fpc, 3) + input.size()[-2:]))
+        backendOut = backendOut.view(input.size(0), self.fpc, self.avg_size)
+        backendOut = self.activation(backendOut)
+        backendOut = self.base_fc(backendOut)
+        if self.save_backend_output:
+            self.backend_out = backendOut
         backendOut = self.activation(backendOut)
         
         attn_q = self.MHA_Q_fc(backendOut)
         attn_k = self.MHA_K_fc(backendOut)
         attn_v = self.MHA_V_fc(backendOut)
         attnOut, _ = self.multihead_attn(attn_q, attn_k, attn_v)
-        attnOut = attnOut.reshape(input.size(0) * 14, 256)
+        attnOut = attnOut.reshape(input.size(0) * self.fpc, self.MHA_dim)
         output = self.last_fc(attnOut)
-        output = output.reshape(input.size(0), 14, 2)
-        output = torch.mean(output, dim=1)
+        output = output.reshape(input.size(0), self.fpc, 2)
+        output = output.mean(dim=1)
         output = torch.softmax(output, dim=1)
 
         return output
