@@ -40,6 +40,9 @@ def parse_args():
     parser.add_argument(
         '--blur',dest='blur',help='blur the video or not',
         default=False, type=bool)
+    parser.add_argument(
+        '--emb_dim',dest='emb_dim',help='Dimension of embedding vector',
+        default=0, type=int)
 
     args = parser.parse_args()
     return args
@@ -55,6 +58,7 @@ if __name__ == '__main__':
     use_detector = args.use_detector
     snapshot_path = args.snapshot
     blur = args.blur
+    emb_dim = args.emb_dim
    
     if blur:
         print('Video will be blurred.')
@@ -77,7 +81,7 @@ if __name__ == '__main__':
             )
         ])
     
-    model=L2CS(torchvision.models.resnet.BasicBlock, [2, 2, 2, 2], 90, eval_mode=True, need_decoder=True)
+    model=L2CS(torchvision.models.resnet.BasicBlock, [2, 2, 2, 2], 90, eval_mode=True, emb_dim=emb_dim)
     saved_state_dict = torch.load('models/L2CSNet_gaze360.pkl')
     # Only load "fc_yaw_gaze.weight", "fc_yaw_gaze.bias", "fc_pitch_gaze.weight", "fc_pitch_gaze.bias"
     to_be_loaded = ['fc_yaw_gaze.weight', 'fc_yaw_gaze.bias', 'fc_pitch_gaze.weight', 'fc_pitch_gaze.bias']

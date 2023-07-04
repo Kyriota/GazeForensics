@@ -67,6 +67,9 @@ def parse_args():
     parser.add_argument(
         '--lr', dest='lr', help='Base learning rate.',
         default=0.00001, type=float)
+    parser.add_argument(
+        '--emb_dim', dest='emb_dim', help='Dimension of the embedding vector.',
+        default=128, type=int)
     # ---------------------------------------------------------------------------------------------------------------------
     # Important args ------------------------------------------------------------------------------------------------------
     args = parser.parse_args()
@@ -116,6 +119,7 @@ if __name__ == '__main__':
     data_set=args.dataset
     alpha = args.alpha
     output=args.output
+    emb_dim = args.emb_dim
 
     class RandomResizeTransforms(object):
 
@@ -149,9 +153,9 @@ if __name__ == '__main__':
     
     
     if data_set=="gaze360":
-        model = L2CS(torchvision.models.resnet.BasicBlock, [2, 2, 2, 2], 90, eval_mode=False, need_decoder=True)
+        model = L2CS(torchvision.models.resnet.BasicBlock, [2, 2, 2, 2], 90, eval_mode=False, emb_dim=emb_dim)
         load_filtered_state_dict(model, model_zoo.load_url('https://download.pytorch.org/models/resnet18-5c106cde.pth'))
-        teacher_model = L2CS(torchvision.models.resnet.Bottleneck, [3, 4, 6, 3], 90, eval_mode=False, need_decoder=False)
+        teacher_model = L2CS(torchvision.models.resnet.Bottleneck, [3, 4, 6, 3], 90, eval_mode=False, emb_dim=0)
         saved_state_dict = torch.load('models/L2CSNet_gaze360.pkl')
         print(teacher_model.load_state_dict(saved_state_dict, strict=False))
         if args.snapshot:
@@ -178,7 +182,7 @@ if __name__ == '__main__':
         criterion = nn.MSELoss().cuda(gpu)
 
         # Optimizer gaze
-        optimizer_gaze = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-6)
+        optimizer_gaze = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-5)
         # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer_gaze, mode='min', factor=0.5, patience=10, verbose=True, threshold=0.0001, threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08)
 
         configuration = f"\ntrain configuration, gpu_id={args.gpu_id}, batch_size={batch_size}, model_arch={args.arch}\nStart testing dataset={data_set}, loader={len(train_loader_gaze)}------------------------- \n"
@@ -189,39 +193,43 @@ if __name__ == '__main__':
         
         for epoch in range(num_epochs):
 
-            sum_loss = cnt = 0
+            sum_l2_loss = sum_MSE_loss = cnt = 0
 
             for i, ((images_ori, images_comp), labels_gaze, cont_labels_gaze,name) in enumerate(train_loader_gaze):
 
                 images_ori = Variable(images_ori).cuda(gpu)
                 images_comp = Variable(images_comp).cuda(gpu)
 
-                model_out = model(images_comp)
+                model_out, code = model(images_comp)
                 with torch.no_grad():
                     teacher_out = teacher_model(images_ori)
 
-                # MSE loss
-                loss = criterion(model_out, teacher_out)
+                # MSE loss + L2 loss
+                l2_loss = torch.norm(code, p=2, dim=1).mean()
+                MSE_loss = criterion(model_out, teacher_out)
+                alpha = 0.25
+                loss = MSE_loss + l2_loss * alpha
+
+                sum_l2_loss += float(l2_loss.cpu().detach())
+                sum_MSE_loss += float(MSE_loss.cpu().detach())
+                cnt += 1
 
                 optimizer_gaze.zero_grad()
                 loss.backward()
                 optimizer_gaze.step()
 
-                sum_loss += loss.detach().cpu().float()
-                
-                cnt += 1
-
                 if (i+1) % 100 == 0:
                     print('Epoch [%d/%d], Iter [%d/%d] Losses: '
-                          'MSE %.4f' % (
+                          'MSE %.4f, L2 %.4f' % (
                                 epoch + 1,
                                 num_epochs,
                                 i + 1,
                                 len(dataset) // batch_size,
-                                sum_loss / cnt
+                                MSE_loss,
+                                l2_loss
                             )
                         )
-                    sum_loss = cnt = 0
+                    sum_l2_loss = sum_MSE_loss = cnt = 0
                     
             # scheduler.step()
           

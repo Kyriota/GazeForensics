@@ -18,7 +18,7 @@ def ClipTrainDatasetParallel(
         output_lock,
         thread_num=4,
         util_percent=1.0,
-        epoch=None,
+        epoch=0,
     ):
     '''
     Fire several sub threads to clip the train dataset into clips.

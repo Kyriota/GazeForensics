@@ -52,6 +52,9 @@ def parse_args():
     parser.add_argument(
         '--arch', dest='arch', help='Network architecture, can be: ResNet18, ResNet34, [ResNet50], ''ResNet101, ResNet152, Squeezenet_1_0, Squeezenet_1_1, MobileNetV2',
         default='ResNet50', type=str)
+    parser.add_argument(
+        '--emb_dim', dest='emb_dim', help='Dimension of the embedding space.',
+        default=0, type=int)
     # ---------------------------------------------------------------------------------------------------------------------
     # Important args ------------------------------------------------------------------------------------------------------
     args = parser.parse_args()
@@ -69,6 +72,7 @@ if __name__ == '__main__':
     bins=90
     angle=None
     bin_width=None
+    emb_dim=args.emb_dim
 
     transformations = [
         transforms.Compose([
@@ -121,7 +125,7 @@ if __name__ == '__main__':
             avg_pitch=[]
             avg_MSE=[]
 
-            teacher_model = L2CS(torchvision.models.resnet.Bottleneck, [3, 4, 6, 3], 90, eval_mode=False, need_decoder=False)
+            teacher_model = L2CS(torchvision.models.resnet.Bottleneck, [3, 4, 6, 3], 90, eval_mode=False, emb_dim=0)
             saved_state_dict = torch.load('models/L2CSNet_gaze360.pkl')
             print(teacher_model.load_state_dict(saved_state_dict, strict=False))
             teacher_model.cuda(gpu)
@@ -129,7 +133,7 @@ if __name__ == '__main__':
 
             for epochs in folder:
 
-                model = L2CS(torchvision.models.resnet.BasicBlock, [2, 2, 2, 2], 90, eval_mode=False, need_decoder=True)
+                model = L2CS(torchvision.models.resnet.BasicBlock, [2, 2, 2, 2], 90, eval_mode=False, emb_dim=emb_dim)
                 saved_state_dict = torch.load(os.path.join(snapshot_path, epochs))
                 print(model.load_state_dict(saved_state_dict, strict=False))
                 
@@ -147,7 +151,7 @@ if __name__ == '__main__':
                         images_ori = Variable(images_ori).cuda(gpu)
                         images_comp = Variable(images_comp).cuda(gpu)
 
-                        model_out = model(images_comp)
+                        model_out, code = model(images_comp)
                         teacher_out = teacher_model(images_ori)
 
                         # MSE loss

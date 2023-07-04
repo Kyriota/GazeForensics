@@ -41,9 +41,9 @@ class FC_block(nn.Module):
 
 
 class L2CS(nn.Module):
-    def __init__(self, block, layers, num_bins, eval_mode=False, need_decoder=True):
+    def __init__(self, block, layers, num_bins, eval_mode=False, emb_dim=0):
         self.eval_mode = eval_mode
-        self.need_decoder = need_decoder
+        self.need_decoder = emb_dim != 0
         self.inplanes = 64
         super(L2CS, self).__init__()
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,bias=False)
@@ -56,8 +56,9 @@ class L2CS(nn.Module):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
-        if need_decoder:
-            self.avg_decoder = FC_block(512 * block.expansion, 2048, [1024, 1024])
+        if self.need_decoder:
+            self.avg_encoder = FC_block(512 * block.expansion, emb_dim, [256, 256])
+            self.avg_decoder = FC_block(emb_dim, 2048, [512, 1024])
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -102,6 +103,8 @@ class L2CS(nn.Module):
         x = x.view(x.size(0), -1)
 
         if self.need_decoder:
+            x = self.avg_encoder(x)
+            code = x.clone()
             x = self.avg_decoder(x)
 
         if self.eval_mode:
@@ -109,4 +112,6 @@ class L2CS(nn.Module):
             pre_pitch_gaze = self.fc_pitch_gaze(x)
             return pre_yaw_gaze, pre_pitch_gaze
 
+        if self.need_decoder:
+            return x, code
         return x

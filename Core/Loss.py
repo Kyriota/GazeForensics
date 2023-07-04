@@ -32,10 +32,13 @@ class CustomLoss:
     
     
     def __call__(self, output, target):
-        output_real = output['out'][:, 1:2]
-        false_negative = torch.logical_and(target['out'][:, 1:] == 1, output_real < self.FN_bound).squeeze()
+        
         self.out_loss = self.BCELoss(output['out'][:, :2], target['out']).mean(dim=1)
-        self.out_loss[false_negative] *= 1 + (self.FN_bound - output_real[false_negative].squeeze()) / self.FN_bound * self.FN_w
+
+        if self.FN_w > 0:
+            output_real = output['out'][:, 1:2]
+            false_negative = torch.logical_and(target['out'][:, 1:] == 1, output_real < self.FN_bound).squeeze()
+            self.out_loss[false_negative] *= 1 + (self.FN_bound - output_real[false_negative].squeeze()) / self.FN_bound * self.FN_w
 
         if self.bonus_weight > 0:
             bonus = get_bonus(output['out'][:, :2], target['out'])

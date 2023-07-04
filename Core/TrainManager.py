@@ -1,6 +1,6 @@
 from Models.MainModel import InitModel
-from Models.Resnet import resnet18
-from Utils.FileOperation import mkdir, rm, mv, fileExist, fileWalk
+from Models.GazeBackend import GazeBackend
+from Utils.FileOperation import mkdir, fileWalk, ls, fileExist
 from Utils.Visualization import ProgressBar, PlotHistory
 from Preprocess.DatasetClipping import ClipTrainDatasetParallel
 from Core.DatasetLoader import DatasetLoader
@@ -10,12 +10,12 @@ from Config import Config
 import torch
 from torch import nn
 import torch.utils.data as TDM # torch data module
+from torchvision.models.resnet import BasicBlock
 
 import threading
 from datetime import datetime
+import time
 import numpy as np
-import math
-import json
 
 
 
@@ -26,6 +26,7 @@ class TrainManager:
         self.config = config
         self.gaze_backend = None
         self.data_loader = None
+        self.current_DS_path = None
         self.output_lock = threading.Lock()
         self.use_gaze = self.config.loss['gaze_weight'] > 0.0
         self.temp_history = None
@@ -67,49 +68,57 @@ class TrainManager:
 
         if self.use_gaze:
             # # Init gaze backend
-            self.gaze_backend = resnet18(pretrained=False)
-            state_dict = torch.load(self.config.basic['checkpointDir'] + 'gazeBackend.pkl')
-            self.gaze_backend.load_state_dict(state_dict, strict=False)
+            self.gaze_backend = GazeBackend(
+                BasicBlock,
+                [2, 2, 2, 2],
+                emb_dim=self.config.model['emb_dim'],
+            )
+            backend_name = 'gazeBackend_' + str(self.config.model['emb_dim']) + '.pkl'
+            state_dict = torch.load(self.config.basic['checkpointDir'] + backend_name)
+            print(self.gaze_backend.load_state_dict(state_dict, strict=False))
             self.gaze_backend = nn.DataParallel(self.gaze_backend).cuda()
             self.gaze_backend.eval()
     
     
     def train(self):
 
-        def get_preprocess_thread(epoch):
+        def get_preprocess_thread(epoch, DS_save_path):
             return threading.Thread(
                 target=ClipTrainDatasetParallel,
                 kwargs={
                     'json_path': self.config.prep['trainCateDictDir'],
-                    'output_path': self.config.prep['tempDir'] + 'next/',
+                    'output_path': DS_save_path,
                     'output_lock': self.output_lock,
                     'thread_num': self.config.prep['thread_num'],
                     'util_percent': self.config.prep['util_percent'],
                     'epoch': epoch,
                 }
             )
-
-
-        def update_dataset():
-            rm(self.config.prep['tempDir'] + 'current/', r=True)
-            mv(self.config.prep['tempDir'] + 'next/', self.config.prep['tempDir'] + 'current/')
         
 
-        def get_preprocess_condition(epoch):
+        def get_preprocess_condition(epoch, target_folder_name):
+            # Check if the dataset is already preprocessed
+            #  - Returning True means preprocess is needed
+            #  - Returning False means preprocess is not needed
             if epoch == self.config.train['num_epochs']:
                 return False
-            if not fileExist(self.config.prep['tempDir'] + 'current'):
-                return True
-            if fileExist(self.config.prep['tempDir'] + 'current/info.json'):
-                with open(self.config.prep['tempDir'] + 'current/info.json', 'r') as f:
-                    info = json.load(f)
-                return \
-                    info['dataset_json_path'] != self.config.prep['trainCateDictDir'] or \
-                    info['util_percent'] != self.config.prep['util_percent']
-            return self.config.prep['prep_every_epoch']
+            saved_datasets = ls(self.config.prep['tempDir'])
+            for folder_name in saved_datasets:
+                if folder_name == target_folder_name:
+                    return False
+            return True
+        
+
+        def get_dataset_folder_name(epoch):
+            return \
+                self.config.basic['train_DS_name'] + '_' + \
+                '{:.1%}'.format(self.config.prep['util_percent']) + '_' + \
+                'epoch' + str(epoch)
+
         
         def init_data_loader():
-            clippedDataPath = self.config.prep['tempDir'] + 'current/'
+            clippedDataPath = self.current_DS_path
+            print('[*] Loading dataset from: ' + clippedDataPath)
             data_dir_list = [[0 if 'fake' in i else 1, clippedDataPath + i] for i in fileWalk(clippedDataPath) if i.endswith('.mp4')]
             self.data_loader = TDM.DataLoader(
                 DatasetLoader(data_dir_list, self.config.prep['transform']),
@@ -165,7 +174,8 @@ class TrainManager:
                 output = self.model(frames_var)
 
                 if self.use_gaze:
-                    gazeTarget = self.gaze_backend(frames_var.view(-1, 3, 224, 224))
+                    with torch.no_grad():
+                        gazeTarget = self.gaze_backend(frames_var.view(-1, 3, 224, 224))
                     gazeEmb = self.model.module.gaze_out.view(-1, gazeTarget.shape[1])
 
                 output = {
@@ -202,7 +212,8 @@ class TrainManager:
                 )
             
             print(
-                '- Mean Out Loss: {:.4f}\n- Mean Acc: {:.4f}'.format(
+                time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+                '\n- Mean Out Loss: {:.4f}\n- Mean Acc: {:.4f}'.format(
                     np.mean(self.temp_history['out_loss']),
                     np.mean(self.temp_history['acc']),
                 ) + ('\n- Mean Total Loss: {:.4f}\n- Mean Gaze Loss: {:.4f}'.format(
@@ -232,49 +243,58 @@ class TrainManager:
             }
             torch.save(checkpoint, self.config.basic['checkpointDir'] + self.config.basic['tryID'] + '/checkpoint_{}.pth'.format(epoch+1))
 
-
+        
         # Create the checkpoint directory
-        self.config.basic['tryID'] = datetime.now().strftime("%y%m%d_%H%M%S")
+        if self.config.basic['tryID'] is None:
+            self.config.basic['tryID'] = datetime.now().strftime("%y%m%d_%H%M%S")
+        if fileExist(self.config.basic['checkpointDir'] + self.config.basic['tryID'] + '/'):
+            print('>> ERROR: Checkpoint directory already exists! Please change tryID in config.')
+            return -1
         mkdir(self.config.basic['checkpointDir'] + self.config.basic['tryID'] + '/')
         
-        if get_preprocess_condition(0):
+        current_folder_name = get_dataset_folder_name(0)
+        self.current_DS_path = self.config.prep['tempDir'] + current_folder_name + '/'
+        if get_preprocess_condition(0, current_folder_name):
             # Preprocess the training dataset
-            preprocess_thread = get_preprocess_thread(0)
+            preprocess_thread = get_preprocess_thread(0, self.current_DS_path)
             preprocess_thread.start()
 
             # Wait for the first preprocessing to finish
             preprocess_thread.join()
-        
-            update_dataset()
 
         init_data_loader()
 
         # Start training
         for epoch in range(self.config.train['num_epochs']):
-
-            preprocess_condition = get_preprocess_condition(epoch+1)
+            
+            dataset_epoch = epoch+1 if self.config.prep['prep_every_epoch'] else 0
+            next_folder_name = get_dataset_folder_name(dataset_epoch)
+            preprocess_condition = get_preprocess_condition(dataset_epoch, next_folder_name)
 
             if preprocess_condition:
                 # Preprocess the training dataset
-                preprocess_thread = get_preprocess_thread(epoch+1)
+                preprocess_thread = get_preprocess_thread(dataset_epoch, self.config.prep['tempDir'] + next_folder_name + '/')
                 preprocess_thread.start()
 
             train(epoch)
             extend_history(self.temp_history)
+            save_checkpoint(epoch)
             PlotHistory(
                 self.history,
                 self.use_gaze,
-                smooth_window_size=math.ceil(512/self.config.train['batch_size']),
+                slice_num=100,
                 global_size=0.5,
             )
-            save_checkpoint(epoch)
             self.scheduler.step()
 
             if preprocess_condition:
                 # Wait for the preprocessing to finish
                 preprocess_thread.join()
 
-                update_dataset()
+            if epoch != self.config.train['num_epochs'] - 1:
+                # Reinitialize the data loader
+                self.current_DS_path = self.config.prep['tempDir'] + get_dataset_folder_name(epoch+1) + '/'
                 init_data_loader()
             
         print('\nTraining finished!')
+        return 0

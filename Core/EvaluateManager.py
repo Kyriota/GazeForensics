@@ -10,7 +10,9 @@ from torch import nn
 import torch.utils.data as TDM # torch data module
 
 import numpy as np
+import json
 from collections import Counter
+import time
 
 
 
@@ -54,7 +56,7 @@ class EvaluateManager:
         self.data_loader = TDM.DataLoader(
             DatasetLoader(data_dir_list, config.prep['transform']),
             batch_size=config.test['batch_size'],
-            shuffle=False,
+            shuffle=True,
             num_workers=config.test['num_workers'],
             pin_memory=True
         )
@@ -63,7 +65,7 @@ class EvaluateManager:
     
     def evaluate(self, checkpoint_path, show_progress=True, show_confusion_mat=True):
 
-        def single_shot(pth_path):
+        def single_shot(pth_path, epoch=1, epochs=1):
             checkpoint = torch.load(pth_path)
 
             # Init model
@@ -86,7 +88,7 @@ class EvaluateManager:
                 print('-' * 50)
                 progress_bar = ProgressBar(
                     'yellow',
-                    'Evaluating',
+                    'Epoch {}/{}'.format(epoch, epochs),
                     len(self.data_loader),
                 )
                 print('-' * 50)
@@ -115,9 +117,11 @@ class EvaluateManager:
                             sum(corrects) / len(corrects)
                         ))
             
-            preds = np.array(preds)
-            ground_truths = np.array(ground_truths)
+            print('Time:', time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
+
             if show_confusion_mat:
+                preds = np.array(preds)
+                ground_truths = np.array(ground_truths)
                 # Show confusion matrix
                 PrintBinConfusionMat(preds, ground_truths)
 
@@ -128,23 +132,48 @@ class EvaluateManager:
 
             return acc, loss
         
+        
+        def get_train_result(checkpoint_path):
+            train_history = torch.load(checkpoint_path)['history']
+            len_per_epoch = train_history['len_per_epoch']
+            train_result = {
+                'out_loss': [
+                    np.mean(
+                        train_history['out_loss'][i:i+len_per_epoch]
+                    ) for i in range(0, len(train_history['out_loss']), len_per_epoch)
+                ],
+                'acc': [
+                    np.mean(
+                        train_history['acc'][i:i+len_per_epoch]
+                    ) for i in range(0, len(train_history['acc']), len_per_epoch)
+                ]
+            }
+            return train_result
+        
 
         if checkpoint_path.endswith('.pth'):
             acc, loss = single_shot(checkpoint_path)
             return acc, loss
         
         checkpoint_paths = fileWalk(checkpoint_path)
+        # Sort checkpoint paths
+        checkpoint_paths.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
         accs = []
         losses = []
-        for pth_path in checkpoint_paths:
-            acc, loss = single_shot(checkpoint_path + pth_path)
+        for epoch, pth_path in enumerate(checkpoint_paths):
+            acc, loss = single_shot(checkpoint_path + pth_path, epoch+1, len(checkpoint_paths))
             accs.append(acc)
             losses.append(loss)
-
-        train_history = torch.load(checkpoint_path + checkpoint_paths[-1])['history']
+        
+        result = {
+            'test_result': {'acc': accs, 'out_loss': losses},
+            'train_result': get_train_result(checkpoint_path + checkpoint_paths[-1]),
+        }
+        with open(self.config.test['resultDir'] + self.config.basic['tryID'] + '.json', 'w') as f:
+            json.dump(result, f)
         PlotResult(
-            {'acc': accs, 'out_loss': losses},
-            train_history,
+            result,
+            result_path=self.config.test['resultDir'] + self.config.basic['tryID'] + '.png'
         )
 
         return accs, losses

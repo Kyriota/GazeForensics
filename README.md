@@ -1,4 +1,4 @@
-# GazeForensics
-Deepfake detection method utilizing gaze information
+# Gaze Forensics
+Deepfake detection method utilizing gaze information.
 
-WIP
+WIP. Current results are stored in `Results` folder.

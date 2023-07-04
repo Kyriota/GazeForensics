@@ -38,19 +38,21 @@ class ProgressBar:
     
 
 
-def PlotHistory(history, use_gaze, smooth_window_size=10, global_size=1):
+def PlotHistory(history, use_gaze, slice_num=100, global_size=1):
     # Plot training history
     #  - if use_gaze is False, only 2 subplots needed to show out_loss and acc
     #  - if use_gaze is True, 4 subplots needed to show out_loss, acc, total_loss and gaze_loss
 
-    def smooth_data(data, window_size):
-        if len(data) < window_size:
+    def smooth_data(data, slice_num):
+        # smooth data by averaging
+        # len(smoothed_data) = slice_num
+        if len(data) < slice_num:
             return data
-        data = data[:]
-        # for _ in range(window_size - 1):
-        #     data.insert(0, data[0])
-        #     data.append(data[-1])
-        return np.convolve(data, np.ones(window_size) / window_size, mode='valid')
+        smoothed_data = []
+        slice_len = len(data) // slice_num
+        for i in range(slice_num):
+            smoothed_data.append(np.mean(data[i * slice_len : (i + 1) * slice_len]))
+        return smoothed_data
 
     
     figsize = (12 * global_size, 8 * global_size)
@@ -58,69 +60,59 @@ def PlotHistory(history, use_gaze, smooth_window_size=10, global_size=1):
 
     # set up figure
     fig = plt.figure(figsize=figsize)
-    ax1 = fig.add_subplot(2, 2, 1)
-    ax1.set_title('Out Loss')
-    ax2 = fig.add_subplot(2, 2, 2)
-    ax2.set_title('Accuracy')
+    axes = [fig.add_subplot(2, 2, i) for i in range(1, 5 if use_gaze else 3)]
+    axes[0].set_ylabel('Out Loss')
+    axes[1].set_ylabel('Accuracy')
     if use_gaze:
-        ax3 = fig.add_subplot(2, 2, 3)
-        ax3.set_title('Total Loss')
-        ax4 = fig.add_subplot(2, 2, 4)
-        ax4.set_title('Gaze Loss')
+        axes[2].set_ylabel('Total Loss')
+        axes[3].set_ylabel('Gaze Loss')
 
     # smooth data
     smoothed_history = {}
     for key in history.keys():
         if type(history[key]) == list:
-            smoothed_history[key] = smooth_data(history[key], smooth_window_size)
+            smoothed_history[key] = smooth_data(history[key], slice_num)
     
     # plot
-    ax1.plot(smoothed_history['out_loss'], label='train')
-    ax1.legend()
-    ax2.plot(smoothed_history['acc'], label='train')
-    ax2.legend()
+    axes[0].plot(smoothed_history['out_loss'], label='train')
+    axes[1].plot(smoothed_history['acc'], label='train')
     if use_gaze:
-        ax3.plot(smoothed_history['total_loss'], label='train')
-        ax3.legend()
-        ax4.plot(smoothed_history['gaze_loss'], label='train')
-        ax4.legend()
+        axes[2].plot(smoothed_history['total_loss'], label='train')
+        axes[3].plot(smoothed_history['gaze_loss'], label='train')
+    
+    for i in range(4 if use_gaze else 2):
+        axes[i].legend()
+        axes[i].grid(True)
     
     plt.show()
 
 
 
-def PlotResult(eval_history, train_history, global_size=1):
+def PlotResult(result, result_path='result.png', global_size=1):
 
-    figsize = (12 * global_size, 8 * global_size)
+    eval_result, train_result = result['test_result'], result['train_result']
+    figsize = (12 * global_size, 4 * global_size)
     plt.rcParams['font.size'] = 12 * global_size
-
-    len_per_epoch = train_history['len_per_epoch']
-    train_history['out_loss'] = [
-        np.mean(
-            train_history['out_loss'][i:i+len_per_epoch]
-        ) for i in range(0, len(train_history['out_loss']), len_per_epoch)
-    ]
-    train_history['acc'] = [
-        np.mean(
-            train_history['acc'][i:i+len_per_epoch]
-        ) for i in range(0, len(train_history['acc']), len_per_epoch)
-    ]
 
     # set up figure
     fig = plt.figure(figsize=figsize)
-    ax1 = fig.add_subplot(2, 2, 1)
-    ax1.set_title('Out Loss')
-    ax2 = fig.add_subplot(2, 2, 2)
-    ax2.set_title('Accuracy')
+    axes = [fig.add_subplot(1, 2, i) for i in range(1, 3)]
+    axes[0].set_ylabel('Out Loss')
+    axes[1].set_ylabel('Accuracy')
     
     # plot
-    ax1.plot(eval_history['out_loss'], label='eval')
-    ax1.plot(train_history['out_loss'], label='train')
-    ax1.legend()
-    ax2.plot(eval_history['acc'], label='eval')
-    ax2.plot(train_history['acc'], label='train')
-    ax2.legend()
+    axes[0].plot(eval_result['out_loss'], 'o-', label='eval')
+    axes[0].plot(train_result['out_loss'], 'o-', label='train')
+    axes[1].plot(eval_result['acc'], 'o-', label='eval')
+    axes[1].plot(train_result['acc'], 'o-', label='train')
+
+    for i in range(2):
+        axes[i].legend()
+        axes[i].grid(True)
+        axes[i].yaxis.set_major_locator(plt.MultipleLocator(0.1))
+        axes[i].yaxis.set_minor_locator(plt.MultipleLocator(0.05))
     
+    fig.savefig(result_path)
     plt.show()
 
 

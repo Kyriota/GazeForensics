@@ -10,7 +10,11 @@ def InitModel(config:Config):
     torch.manual_seed(config.model['seed'])
     model = GazeForensics(
         save_gaze_out=config.loss['gaze_weight'] > 0.0,
-        leaky=config.model['leaky']
+        leaky=config.model['leaky'],
+        gaze_emb_dim=config.model['emb_dim'],
+        head_num=config.model['head_num'],
+        dim_per_head=config.model['dim_per_head'],
+        comp_dim=config.model['comp_dim'],
     )
     model = nn.DataParallel(model).cuda()
     return model
@@ -54,35 +58,46 @@ class FC_block(nn.Module):
 
 
 class GazeForensics(nn.Module):
-    def __init__(self, save_gaze_out=False, leaky=0):
+    def __init__(
+            self,
+            save_gaze_out=False,
+            leaky=0,
+            gaze_emb_dim=512,
+            head_num=4,
+            dim_per_head=32,
+            comp_dim=64,
+        ):
         nn.Module.__init__(self)
 
         self.save_gaze_out = save_gaze_out
-        
+
         self.leaky = leaky
         self.avg_dim = 512
-        self.emb_dim = 512 + leaky
-        self.MHA_dim = 512
-        self.MHA_comp_dim = 128
+        self.emb_dim = gaze_emb_dim + leaky
+        self.MHA_dim = head_num * dim_per_head
+        self.MHA_comp_dim = comp_dim
         self.fpc = 14 # frames per clip
-
-        self.base_model = resnet18(pretrained=True)
-        self.gaze_fc = FC_block(self.avg_dim, self.emb_dim, mid_sizes=[1024, 1024])
-
-        self.MHA_Q_fc = FC_block(self.emb_dim, self.MHA_dim, mid_sizes=[768, 768])
-        self.MHA_K_fc = FC_block(self.emb_dim, self.MHA_dim, mid_sizes=[768, 768])
-        self.MHA_V_fc = FC_block(self.emb_dim, self.MHA_dim, mid_sizes=[768, 768])
-        self.multihead_attn = nn.MultiheadAttention(self.MHA_dim, 4, batch_first=True)
-
-        self.MHA_comp = FC_block(self.MHA_dim, self.MHA_comp_dim, mid_sizes=[512, 512])
-
-        # Put addtional parts after fundamental parts initialized
-        # So that within the same seed, most parts of the model are the same
-        self.last_fc = FC_block(self.MHA_comp_dim * self.fpc, 3, mid_sizes=[512, 128])
-
+        self.gaze_out = None
         self.softmax = nn.Softmax(dim=1)
 
-        self.gaze_out = None
+        self.base_model = resnet18(pretrained=True)
+        self.multihead_attn = nn.MultiheadAttention(self.MHA_dim, head_num, batch_first=True)
+        self.MHA_comp = FC_block(self.MHA_dim, self.MHA_comp_dim, mid_sizes=[
+            256,
+            self.MHA_comp_dim
+        ])
+        last_fc_input_size = self.MHA_comp_dim * self.fpc
+        self.last_fc = FC_block(last_fc_input_size, 3, mid_sizes=[
+            last_fc_input_size // 2,
+            last_fc_input_size // 4,
+        ])
+
+        # To minimize the influence on other layers within a fixed seed,
+        # initialize layers influenced by hyperparameters after other layers have been initialized.
+        self.gaze_fc = FC_block(self.avg_dim, self.emb_dim, mid_sizes=[self.emb_dim])
+        self.MHA_Q_fc = FC_block(self.emb_dim, self.MHA_dim, mid_sizes=[self.MHA_dim, self.MHA_dim])
+        self.MHA_K_fc = FC_block(self.emb_dim, self.MHA_dim, mid_sizes=[self.MHA_dim, self.MHA_dim])
+        self.MHA_V_fc = FC_block(self.emb_dim, self.MHA_dim, mid_sizes=[self.MHA_dim, self.MHA_dim])
 
 
     def forward(self, x):
