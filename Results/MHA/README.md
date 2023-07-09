@@ -2,21 +2,21 @@
 
 ## Result
 
+32-dim head * 4:
+
 <img src="Standard-4-32.png" alt="Standard-512"  />
 
-<center><small>32-dim head * 4</small></center>
+64-dim head * 4
 
 ![Standard-256](Standard-4-64.png)
 
-<center><small>64-dim head * 4</small></center>
+32-dim head * 8:
 
 <img src="Standard-8-32.png" alt="Standard-128"  />
 
-<center><small>32-dim head * 8</small></center>
+64-dim head * 8:
 
 <img src="Standard-8-64.png" alt="Standard-128"  />
-
-<center><small>64-dim head * 8</small></center>
 
 According to the figures, it's obvious that 8 heads are more stable from loss aspect, and 64-dim head has better learning ability.
 

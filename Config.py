@@ -35,6 +35,7 @@ class Config:
         }
         params_opti = { # Parameters that controls optimizing, loss, scheduling.
             'lr': 1e-5,
+            'decoder_lr': 1e-4,
             'weight_decay': 1e-5,
             'step_size': 1,
             'gamma': 0.95,
@@ -44,6 +45,7 @@ class Config:
             'bonus_weight': 0,
             'FN_w': 1, # False negative weight in custom loss
             'FN_bound': 0.6, # False negative boundary in custom loss
+            'decoder_weight': 0,
             'gaze_weight': 0,
             #   'gaze_weight' decides whether to use gaze info or not
             #   because final_loss = output_BCE_loss + gaze_weight * gaze_MSE_loss
@@ -85,6 +87,9 @@ class Config:
             'batch_size': 16,
             'num_workers': 4,
             'seed': 64, # This seed if for the random shuffle of the dataset in training
+            'decoder_alpha': 0.2, # Percentage of train iterations to train decoder, (0, 1)
+            'decoder_num_epochs': 1, # Epochs to train decoder
+            'decoder_enable_epoch': 0, # Enable decoder after which epoch?
         }
 
 

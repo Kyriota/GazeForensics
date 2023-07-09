@@ -2,19 +2,17 @@
 
 ## Result
 
-Results on 512-dim, 256-dim, 128-dim:
+512-dim:
 
-<img src="Standard-512.png" alt="Standard-512" style="zoom:80%;" />
+<img src="Standard-512.png" alt="Standard-512"  />
 
-<center><small>512-dim</small></center>
+256-dim:
 
 ![Standard-256](Standard-256.png)
 
-<center><small>256-dim</small></center>
+128-dim:
 
-<img src="Standard-128.png" alt="Standard-128" style="zoom:80%;" />
-
-<center><small>128-dim</small></center>
+<img src="Standard-128.png" alt="Standard-128"  />
 
 According to the figures, it's obvious that 512-dim layer width fits the dataset better, and it's even more consistent in loss, which may alleviate overfitting.
 

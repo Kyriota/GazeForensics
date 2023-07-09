@@ -13,6 +13,51 @@ def NormalizeImage(img, max=255):
 
 
 
+def smooth_data(data, slice_num):
+    # smooth data by averaging
+    # len(smoothed_data) = slice_num
+    if len(data) < slice_num:
+        return data
+    smoothed_data = []
+    slice_len = len(data) // slice_num
+    for i in range(slice_num):
+        smoothed_data.append(np.mean(data[i * slice_len : (i + 1) * slice_len]))
+    return smoothed_data
+
+
+
+def sample_data(data, sample_num=8):
+    sampled_data = []
+    for i in range(sample_num):
+        temp = data[i][0].cpu().detach().numpy()
+        temp = np.transpose(temp, (1, 2, 0))
+        temp = NormalizeImage(temp)
+        sampled_data.append(temp)
+    return np.array(sampled_data)
+
+
+
+def show_decoder_samples(original, decoded, title='Decoder Samples'):
+    num_rows = 4
+    num_cols = 4
+    fig, axes = plt.subplots(num_rows, num_cols, figsize=(3, 3))
+    # plt.rcParams['font.size'] = 8
+    plt.subplots_adjust(wspace=0.02, hspace=0.02)
+
+    for i in range(num_rows // 2):
+        for j in range(num_cols):
+            index = i * num_cols + j
+            axes[i*2, j].imshow(original[index])
+            axes[i*2, j].axis('off')
+            axes[i*2 + 1, j].imshow(decoded[index])
+            axes[i*2 + 1, j].axis('off')
+    
+    # fig.suptitle(title)
+    print('>> ' + title + ':')
+    plt.show()
+
+
+
 class ProgressBar:
     def __init__(self, color, description, total_len):
         self.progress_bar = widgets.FloatProgress(
@@ -43,18 +88,6 @@ def PlotHistory(history, use_gaze, slice_num=100, global_size=1):
     #  - if use_gaze is False, only 2 subplots needed to show out_loss and acc
     #  - if use_gaze is True, 4 subplots needed to show out_loss, acc, total_loss and gaze_loss
 
-    def smooth_data(data, slice_num):
-        # smooth data by averaging
-        # len(smoothed_data) = slice_num
-        if len(data) < slice_num:
-            return data
-        smoothed_data = []
-        slice_len = len(data) // slice_num
-        for i in range(slice_num):
-            smoothed_data.append(np.mean(data[i * slice_len : (i + 1) * slice_len]))
-        return smoothed_data
-
-    
     figsize = (12 * global_size, 8 * global_size)
     plt.rcParams['font.size'] = 12 * global_size
 
@@ -131,6 +164,8 @@ def PrintBinConfusionMat(prediction, ground_truth):
         ['Pred T',  tp,         fp       ],
         ['Pred F',  fn,         tn       ]
     ]
+    confusion_mat = tabulate(confusion_mat, tablefmt='orgtbl')
     print(' > Confusion Matrix:')
-    print(tabulate(confusion_mat, tablefmt='orgtbl'))
+    print(confusion_mat)
     print(' > Total', len(prediction), 'samples')
+    return confusion_mat

@@ -122,15 +122,14 @@ class EvaluateManager:
             if show_confusion_mat:
                 preds = np.array(preds)
                 ground_truths = np.array(ground_truths)
-                # Show confusion matrix
-                PrintBinConfusionMat(preds, ground_truths)
+                confusion_mat = PrintBinConfusionMat(preds, ground_truths)
 
             acc = sum(corrects) / len(corrects)
             loss = np.mean(losses)
 
             print(' > Acc: {:.4f} | Loss: {:.4f}'.format(acc, loss))
 
-            return acc, loss
+            return acc, loss, confusion_mat
         
         
         def get_train_result(checkpoint_path):
@@ -152,7 +151,7 @@ class EvaluateManager:
         
 
         if checkpoint_path.endswith('.pth'):
-            acc, loss = single_shot(checkpoint_path)
+            acc, loss, _ = single_shot(checkpoint_path)
             return acc, loss
         
         checkpoint_paths = fileWalk(checkpoint_path)
@@ -160,13 +159,15 @@ class EvaluateManager:
         checkpoint_paths.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
         accs = []
         losses = []
+        confusion_mats = []
         for epoch, pth_path in enumerate(checkpoint_paths):
-            acc, loss = single_shot(checkpoint_path + pth_path, epoch+1, len(checkpoint_paths))
+            acc, loss, confusion_mat = single_shot(checkpoint_path + pth_path, epoch+1, len(checkpoint_paths))
             accs.append(acc)
             losses.append(loss)
+            confusion_mats.append(confusion_mat)
         
         result = {
-            'test_result': {'acc': accs, 'out_loss': losses},
+            'test_result': {'acc': accs, 'out_loss': losses, 'confusion_mat': confusion_mats},
             'train_result': get_train_result(checkpoint_path + checkpoint_paths[-1]),
         }
         with open(self.config.test['resultDir'] + self.config.basic['tryID'] + '.json', 'w') as f:

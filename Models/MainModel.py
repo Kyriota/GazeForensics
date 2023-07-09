@@ -9,9 +9,9 @@ from Config import Config
 def InitModel(config:Config):
     torch.manual_seed(config.model['seed'])
     model = GazeForensics(
-        save_gaze_out=config.loss['gaze_weight'] > 0.0,
+        save_emb_out=config.loss['gaze_weight'] > 0,
         leaky=config.model['leaky'],
-        gaze_emb_dim=config.model['emb_dim'],
+        emb_dim=config.model['emb_dim'],
         head_num=config.model['head_num'],
         dim_per_head=config.model['dim_per_head'],
         comp_dim=config.model['comp_dim'],
@@ -57,27 +57,58 @@ class FC_block(nn.Module):
 
 
 
+class ImageDecoder(nn.Module):
+    # This class decode the image from a vector using a series of deconvolution layers
+    def __init__(self):
+        nn.Module.__init__(self)
+        self.emb_dim = 512
+        self.fc = FC_block(self.emb_dim, 7*7*256, mid_sizes=[512, 1024, 1024])
+        self.deconv = nn.Sequential(
+            nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 16, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+            nn.ConvTranspose2d(16, 3, kernel_size=4, stride=2, padding=1),
+            nn.Tanh(),
+        )
+
+    def forward(self, x):
+        x = self.fc(x)
+        x = x.view(-1, 256, 7, 7)
+        x = self.deconv(x)
+        return x
+
+
+
 class GazeForensics(nn.Module):
     def __init__(
             self,
-            save_gaze_out=False,
+            save_emb_out=False,
             leaky=0,
-            gaze_emb_dim=512,
+            emb_dim=512,
             head_num=4,
             dim_per_head=32,
             comp_dim=64,
         ):
         nn.Module.__init__(self)
 
-        self.save_gaze_out = save_gaze_out
+        self.save_emb_out = save_emb_out
 
         self.leaky = leaky
         self.avg_dim = 512
-        self.emb_dim = gaze_emb_dim + leaky
+        self.total_emb_dim = emb_dim + leaky
         self.MHA_dim = head_num * dim_per_head
         self.MHA_comp_dim = comp_dim
         self.fpc = 14 # frames per clip
-        self.gaze_out = None
+        self.emb_out = None
         self.softmax = nn.Softmax(dim=1)
 
         self.base_model = resnet18(pretrained=True)
@@ -92,12 +123,14 @@ class GazeForensics(nn.Module):
             last_fc_input_size // 4,
         ])
 
+        self.gaze_fc = FC_block(self.avg_dim, self.total_emb_dim, mid_sizes=[self.total_emb_dim])
+        self.MHA_Q_fc = FC_block(self.total_emb_dim, self.MHA_dim, mid_sizes=[self.MHA_dim, self.MHA_dim])
+        self.MHA_K_fc = FC_block(self.total_emb_dim, self.MHA_dim, mid_sizes=[self.MHA_dim, self.MHA_dim])
+        self.MHA_V_fc = FC_block(self.total_emb_dim, self.MHA_dim, mid_sizes=[self.MHA_dim, self.MHA_dim])
+
         # To minimize the influence on other layers within a fixed seed,
         # initialize layers influenced by hyperparameters after other layers have been initialized.
-        self.gaze_fc = FC_block(self.avg_dim, self.emb_dim, mid_sizes=[self.emb_dim])
-        self.MHA_Q_fc = FC_block(self.emb_dim, self.MHA_dim, mid_sizes=[self.MHA_dim, self.MHA_dim])
-        self.MHA_K_fc = FC_block(self.emb_dim, self.MHA_dim, mid_sizes=[self.MHA_dim, self.MHA_dim])
-        self.MHA_V_fc = FC_block(self.emb_dim, self.MHA_dim, mid_sizes=[self.MHA_dim, self.MHA_dim])
+
 
 
     def forward(self, x):
@@ -105,8 +138,8 @@ class GazeForensics(nn.Module):
         x = self.base_model(x.view((batch_size * self.fpc, 3) + x.size()[-2:]))
         x = x.view(batch_size, self.fpc, self.avg_dim)
         x = self.gaze_fc(x)
-        if self.save_gaze_out:
-            self.gaze_out = x[:, :, :self.emb_dim-self.leaky]
+        if self.save_emb_out:
+            self.emb_out = x[:, :, :self.total_emb_dim-self.leaky]
         
         q, k, v = self.MHA_Q_fc(x), self.MHA_K_fc(x), self.MHA_V_fc(x)
         x, _ = self.multihead_attn(q, k, v)

@@ -2,17 +2,17 @@
 
 ## Result
 
+comp32:
+
 ![](Standard-comp32.png)
 
-<center><small>comp32</small></center>
+comp64:
 
 ![](Standard-comp64.png)
 
-<center><small>comp64</small></center>
+comp128:
 
 ![](Standard-comp128.png)
-
-<center><small>comp128</small></center>
 
 According to the figures, it seems that compress the features into 32-dim is better.
 

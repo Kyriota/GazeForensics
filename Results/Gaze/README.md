@@ -2,29 +2,29 @@
 
 ## Result
 
+Gaze * 0.0:
+
 ![](Gaze_x_0.0.png)
 
-<center><small>Gaze * 0.0</small></center>
+Gaze * 1.0:
 
 ![](Gaze_x_1.0.png)
 
-<center><small>Gaze * 1.0</small></center>
+Gaze * 2.0:
 
 ![](Gaze_x_2.0.png)
 
-<center><small>Gaze * 2.0</small></center>
+Gaze * 4.0:
 
 ![](Gaze_x_4.0.png)
 
-<center><small>Gaze * 4.0</small></center>
+Gaze * 8.0:
 
 ![](Gaze_x_8.0.png)
 
-<center><small>Gaze * 8.0</small></center>
+Gaze * 16.0
 
 ![](Gaze_x_16.0.png)
-
-<center><small>Gaze * 16.0</small></center>
 
 According to the figures, as the weight of gaze in loss function increases, the model's learning speed decreases, and the evaluation curve tends to be more stable. However, we cannot see dramatic boost in model performance.
 
