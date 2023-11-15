@@ -45,6 +45,7 @@ def ClipTrainDatasetParallel(
         np.random.shuffle(vid_category_dict['fake_train'])
         np.random.shuffle(vid_category_dict['real_train'])
 
+        warned = False
         for _ in range(residual):
             # Find the video with the max split_num and reduce it by 1
             # If split_num comes to 0, remove the video from the list
@@ -52,6 +53,9 @@ def ClipTrainDatasetParallel(
                 max_element = max(vid_category_dict[key], key=lambda x: x['split_num'])
                 max_element['split_num'] -= 1
                 if max_element['split_num'] == 0:
+                    if not warned:
+                        print('>>> Removing videos from dataset to match util_percent, consider increasing util_percent')
+                        warned = True
                     vid_category_dict[key].remove(max_element)
     
     # Split the dataset into several parts
@@ -234,6 +238,8 @@ def ClipTestDataset(
     rm(output_path, r=True)
     mkdir(output_path)
 
+    np.random.seed(0)
+
     for vid_category_key in vid_category_dict:
         if vid_category_key == 'len_per_vid' or 'train' in vid_category_key:
             continue
@@ -251,22 +257,32 @@ def ClipTestDataset(
 
             frames_list = []
             vidcap = cv2.VideoCapture(vid_path)
-            while vidcap.isOpened():
+            if not vidcap.isOpened():
+                print('\n>>> ERROR: Failed to open the video\n\t', vid_path)
+                return
+            while True:
                 success, image = vidcap.read()
                 if success:
                     frames_list.append(image)
                 else:
-                    print('\n>>> ERROR: Failed to read the video\n\t', vid_path)
-                    return
+                    break
             vidcap.release()
 
             serial_num = 0
-            for step in range(1, split_num+1):
+            last_vid_num = None
+            for step in range(split_num, 0, -1):
+                if step <= 3 and split_num != 1 and serial_num >= 5:
+                    break
                 vid_num = vid_len // (step * len_per_vid)
+                if last_vid_num is not None and last_vid_num+2 >= vid_num:
+                    continue
+                last_vid_num = vid_num
+                redundance = vid_len % (step * len_per_vid)
+                random_offset = np.random.randint(0, redundance) if redundance else 0
                 for j in range(vid_num):
                     temp_frames = []
                     for k in range(len_per_vid):
-                        temp_frames.append(frames_list[(j*len_per_vid+k)*step])
+                        temp_frames.append(frames_list[(j*len_per_vid+k)*step+random_offset])
                         
                     '''
                     # Display frames for debugging using PIL.Image.show()

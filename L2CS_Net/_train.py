@@ -1,6 +1,8 @@
 import os
 import argparse
 import time
+import random
+from numpy import ceil
 
 import torch.utils.model_zoo as model_zoo
 import torch
@@ -11,13 +13,9 @@ from torchvision import transforms
 import torch.backends.cudnn as cudnn
 import torchvision
 
-import _datasets as datasets
-from _backend import L2CS
+import datasets
+from model import L2CS
 from utils import select_device
-import random
-from PIL import Image
-import numpy as np
-from datetime import datetime
 
 
 def parse_args():
@@ -60,16 +58,13 @@ def parse_args():
         default=1, type=int)
     parser.add_argument(
         '--arch', dest='arch', help='Network architecture, can be: ResNet18, ResNet34, [ResNet50], ''ResNet101, ResNet152, Squeezenet_1_0, Squeezenet_1_1, MobileNetV2',
-        default='ResNet50', type=str)
+        default='ResNet18', type=str)
     parser.add_argument(
         '--alpha', dest='alpha', help='Regression loss coefficient.',
         default=1, type=float)
     parser.add_argument(
         '--lr', dest='lr', help='Base learning rate.',
-        default=0.00001, type=float)
-    parser.add_argument(
-        '--emb_dim', dest='emb_dim', help='Dimension of the embedding vector.',
-        default=128, type=int)
+        default=0.0001, type=float)
     # ---------------------------------------------------------------------------------------------------------------------
     # Important args ------------------------------------------------------------------------------------------------------
     args = parser.parse_args()
@@ -108,7 +103,30 @@ def load_filtered_state_dict(model, snapshot):
     model_dict = model.state_dict()
     snapshot = {k: v for k, v in snapshot.items() if k in model_dict}
     model_dict.update(snapshot)
-    model.load_state_dict(model_dict, strict=False)
+    model.load_state_dict(model_dict)
+
+
+def getArch_weights(arch, bins):
+    if arch == 'ResNet18':
+        model = L2CS(torchvision.models.resnet.BasicBlock, [2, 2, 2, 2], bins)
+        pre_url = 'https://download.pytorch.org/models/resnet18-5c106cde.pth'
+    elif arch == 'ResNet34':
+        model = L2CS(torchvision.models.resnet.BasicBlock, [3, 4, 6, 3], bins)
+        pre_url = 'https://download.pytorch.org/models/resnet34-333f7ec4.pth'
+    elif arch == 'ResNet101':
+        model = L2CS(torchvision.models.resnet.Bottleneck, [3, 4, 23, 3], bins)
+        pre_url = 'https://download.pytorch.org/models/resnet101-5d3b4d8f.pth'
+    elif arch == 'ResNet152':
+        model = L2CS(torchvision.models.resnet.Bottleneck,[3, 8, 36, 3], bins)
+        pre_url = 'https://download.pytorch.org/models/resnet152-b121ed2d.pth'
+    else:
+        if arch != 'ResNet50':
+            print('Invalid value for architecture is passed! '
+                  'The default value of ResNet50 will be used instead!')
+        model = L2CS(torchvision.models.resnet.Bottleneck, [3, 4, 6, 3], bins)
+        pre_url = 'https://download.pytorch.org/models/resnet50-19c8e357.pth'
+
+    return model, pre_url
 
 if __name__ == '__main__':
     args = parse_args()
@@ -119,119 +137,139 @@ if __name__ == '__main__':
     data_set=args.dataset
     alpha = args.alpha
     output=args.output
-    emb_dim = args.emb_dim
 
-    class RandomResizeTransforms(object):
+    class RandomResizeTransform(object):
 
         def __call__(self, img):
-            if random.random() < 0.5:
-                size = random.randint(32, 223)
-                return img.resize((size, size))
-                # return img.resize((32, 32))
-            else:
-                return img
-
-    transformations = [
-        transforms.Compose([
-            transforms.Resize(448),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225]
-            )
-        ]),
-        transforms.Compose([
-            RandomResizeTransforms(),
-            transforms.Resize(224),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225]
-            )
-        ]),
-    ]
+            size = random.randint(32, 224)
+            return img.resize((size, size))
+    
+    
+    transformations = transforms.Compose([
+        transforms.RandomResizedCrop((224, 224), scale=(0.7, 1.0), ratio=(0.8, 1.3)),
+        transforms.ColorJitter(brightness=0.25, contrast=0.25, saturation=0.25),
+        RandomResizeTransform(),
+        transforms.Resize(224),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        )
+    ])
+    
     
     
     if data_set=="gaze360":
-        model = L2CS(torchvision.models.resnet.BasicBlock, [2, 2, 2, 2], 90, eval_mode=False, emb_dim=emb_dim)
-        load_filtered_state_dict(model, model_zoo.load_url('https://download.pytorch.org/models/resnet18-5c106cde.pth'))
-        teacher_model = L2CS(torchvision.models.resnet.Bottleneck, [3, 4, 6, 3], 90, eval_mode=False, emb_dim=0)
-        saved_state_dict = torch.load('models/L2CSNet_gaze360.pkl')
-        print(teacher_model.load_state_dict(saved_state_dict, strict=False))
-        if args.snapshot:
+        model, pre_url = getArch_weights(args.arch, 90)
+        if args.snapshot == '':
+            load_filtered_state_dict(model, model_zoo.load_url(pre_url))
+        else:
             saved_state_dict = torch.load(args.snapshot)
-            print(model.load_state_dict(saved_state_dict, strict=False))
+            model.load_state_dict(saved_state_dict)
+        
         
         model.cuda(gpu)
-        teacher_model.cuda(gpu)
         dataset=datasets.Gaze360(args.gaze360label_dir, args.gaze360image_dir, transformations, 180, 4)
         print('Loading data.')
         train_loader_gaze = DataLoader(
             dataset=dataset,
             batch_size=int(batch_size),
             shuffle=True,
-            num_workers=4,
-            pin_memory=True)
+            num_workers=0,
+            pin_memory=False)
         torch.backends.cudnn.benchmark = True
 
-        summary_name = '{}_{}'.format('L2CS-gaze360-', datetime.now().strftime("%y%m%d%H%M%S"))
+        summary_name = '{}_{}'.format('L2CS-gaze360-', int(time.time()))
         output=os.path.join(output, summary_name)
         if not os.path.exists(output):
             os.makedirs(output)
 
-        criterion = nn.MSELoss().cuda(gpu)
+        
+        criterion = nn.CrossEntropyLoss().cuda(gpu)
+        reg_criterion = nn.MSELoss().cuda(gpu)
+        softmax = nn.Softmax(dim=1).cuda(gpu)
+        idx_tensor = [idx for idx in range(90)]
+        idx_tensor = Variable(torch.FloatTensor(idx_tensor)).cuda(gpu)
+        
 
         # Optimizer gaze
-        optimizer_gaze = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-5)
-        # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer_gaze, mode='min', factor=0.5, patience=10, verbose=True, threshold=0.0001, threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-08)
+        optimizer_gaze = torch.optim.AdamW(model.parameters(), args.lr, weight_decay=1e-2)
+
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer_gaze,
+            max_lr=args.lr,
+            pct_start=0.2,
+            div_factor=1e3,
+            total_steps=num_epochs*int(ceil(len(dataset)/batch_size))
+        )
+       
 
         configuration = f"\ntrain configuration, gpu_id={args.gpu_id}, batch_size={batch_size}, model_arch={args.arch}\nStart testing dataset={data_set}, loader={len(train_loader_gaze)}------------------------- \n"
         print(configuration)
-
-        model.train()
-        teacher_model.eval()
-        
         for epoch in range(num_epochs):
+            sum_loss_pitch_gaze = sum_loss_yaw_gaze = iter_gaze = 0
+            
+            for i, (images_gaze, labels_gaze, cont_labels_gaze,name) in enumerate(train_loader_gaze):
+                images_gaze = Variable(images_gaze).cuda(gpu)
+                
+                # Binned labels
+                label_pitch_gaze = Variable(labels_gaze[:, 0]).cuda(gpu)
+                label_yaw_gaze = Variable(labels_gaze[:, 1]).cuda(gpu)
 
-            sum_l2_loss = sum_MSE_loss = cnt = 0
+                # Continuous labels
+                label_pitch_cont_gaze = Variable(cont_labels_gaze[:, 0]).cuda(gpu)
+                label_yaw_cont_gaze = Variable(cont_labels_gaze[:, 1]).cuda(gpu)
 
-            for i, ((images_ori, images_comp), labels_gaze, cont_labels_gaze,name) in enumerate(train_loader_gaze):
+                pitch, yaw = model(images_gaze)
 
-                images_ori = Variable(images_ori).cuda(gpu)
-                images_comp = Variable(images_comp).cuda(gpu)
+                # Cross entropy loss
+                loss_pitch_gaze = criterion(pitch, label_pitch_gaze)
+                loss_yaw_gaze = criterion(yaw, label_yaw_gaze)
 
-                model_out, code = model(images_comp)
-                with torch.no_grad():
-                    teacher_out = teacher_model(images_ori)
+                # MSE loss
+                pitch_predicted = softmax(pitch)
+                yaw_predicted = softmax(yaw)
 
-                # MSE loss + L2 loss
-                l2_loss = torch.norm(code, p=2, dim=1).mean()
-                MSE_loss = criterion(model_out, teacher_out)
-                alpha = 0.25
-                loss = MSE_loss + l2_loss * alpha
+                pitch_predicted = \
+                    torch.sum(pitch_predicted * idx_tensor, 1) * 4 - 180
+                yaw_predicted = \
+                    torch.sum(yaw_predicted * idx_tensor, 1) * 4 - 180
 
-                sum_l2_loss += float(l2_loss.cpu().detach())
-                sum_MSE_loss += float(MSE_loss.cpu().detach())
-                cnt += 1
+                loss_reg_pitch = reg_criterion(
+                    pitch_predicted, label_pitch_cont_gaze)
+                loss_reg_yaw = reg_criterion(
+                    yaw_predicted, label_yaw_cont_gaze)
 
-                optimizer_gaze.zero_grad()
-                loss.backward()
+                # Total loss
+                loss_pitch_gaze += alpha * loss_reg_pitch
+                loss_yaw_gaze += alpha * loss_reg_yaw
+
+                sum_loss_pitch_gaze += loss_pitch_gaze
+                sum_loss_yaw_gaze += loss_yaw_gaze
+
+                loss_seq = [loss_pitch_gaze, loss_yaw_gaze]
+                grad_seq = [torch.tensor(1.0).cuda(gpu) for _ in range(len(loss_seq))]
+                optimizer_gaze.zero_grad(set_to_none=True)
+                torch.autograd.backward(loss_seq, grad_seq)
                 optimizer_gaze.step()
+                scheduler.step()
+                
+                iter_gaze += 1
 
                 if (i+1) % 100 == 0:
                     print('Epoch [%d/%d], Iter [%d/%d] Losses: '
-                          'MSE %.4f, L2 %.4f' % (
-                                epoch + 1,
-                                num_epochs,
-                                i + 1,
-                                len(dataset) // batch_size,
-                                MSE_loss,
-                                l2_loss
-                            )
+                        'Gaze Yaw %.4f,Gaze Pitch %.4f,LR %f' % (
+                            epoch+1,
+                            num_epochs,
+                            i+1,
+                            len(dataset)//batch_size,
+                            sum_loss_pitch_gaze/iter_gaze,
+                            sum_loss_yaw_gaze/iter_gaze,
+                            optimizer_gaze.param_groups[0]['lr']
                         )
-                    sum_l2_loss = sum_MSE_loss = cnt = 0
-                    
-            # scheduler.step()
+                    )
+                    sum_loss_pitch_gaze = sum_loss_yaw_gaze = iter_gaze = 0
+        
           
             if epoch % 1 == 0 and epoch < num_epochs:
                 print('Taking snapshot...',
@@ -239,3 +277,126 @@ if __name__ == '__main__':
                                 output +'/'+
                                 '_epoch_' + str(epoch+1) + '.pkl')
                     )
+            
+
+   
+    elif data_set=="mpiigaze":
+        folder = os.listdir(args.gazeMpiilabel_dir)
+        folder.sort()
+        testlabelpathombined = [os.path.join(args.gazeMpiilabel_dir, j) for j in folder]
+        for fold in range(15):
+            model, pre_url = getArch_weights(args.arch, 28)
+            load_filtered_state_dict(model, model_zoo.load_url(pre_url))
+            model = nn.DataParallel(model)
+            model.to(gpu)
+            print('Loading data.')
+            dataset=datasets.Mpiigaze(testlabelpathombined,args.gazeMpiimage_dir, transformations, True, fold)
+            train_loader_gaze = DataLoader(
+                dataset=dataset,
+                batch_size=int(batch_size),
+                shuffle=True,
+                num_workers=4,
+                pin_memory=True)
+            torch.backends.cudnn.benchmark = True
+
+            summary_name = '{}_{}'.format('L2CS-mpiigaze', int(time.time()))
+            
+
+            if not os.path.exists(os.path.join(output+'/{}'.format(summary_name),'fold' + str(fold))):
+                os.makedirs(os.path.join(output+'/{}'.format(summary_name),'fold' + str(fold)))
+
+            
+            criterion = nn.CrossEntropyLoss().cuda(gpu)
+            reg_criterion = nn.MSELoss().cuda(gpu)
+            softmax = nn.Softmax(dim=1).cuda(gpu)
+            idx_tensor = [idx for idx in range(28)]
+            idx_tensor = Variable(torch.FloatTensor(idx_tensor)).cuda(gpu)
+
+            # Optimizer gaze
+            optimizer_gaze = torch.optim.Adam([
+                {'params': get_ignored_params(model, args.arch), 'lr': 0},
+                {'params': get_non_ignored_params(model, args.arch), 'lr': args.lr},
+                {'params': get_fc_params(model, args.arch), 'lr': args.lr}
+            ], args.lr)
+
+            
+
+            configuration = f"\ntrain configuration, gpu_id={args.gpu_id}, batch_size={batch_size}, model_arch={args.arch}\n Start training dataset={data_set}, loader={len(train_loader_gaze)}, fold={fold}--------------\n"
+            print(configuration)
+            for epoch in range(num_epochs):
+                sum_loss_pitch_gaze = sum_loss_yaw_gaze = iter_gaze = 0
+
+                
+                for i, (images_gaze, labels_gaze, cont_labels_gaze,name) in enumerate(train_loader_gaze):
+                    images_gaze = Variable(images_gaze).cuda(gpu)
+
+                    # Binned labels
+                    label_pitch_gaze = Variable(labels_gaze[:, 0]).cuda(gpu)
+                    label_yaw_gaze = Variable(labels_gaze[:, 1]).cuda(gpu)
+
+                    # Continuous labels
+                    label_pitch_cont_gaze = Variable(cont_labels_gaze[:, 0]).cuda(gpu)
+                    label_yaw_cont_gaze = Variable(cont_labels_gaze[:, 1]).cuda(gpu)
+
+                    pitch, yaw = model(images_gaze)
+
+                    # Cross entropy loss
+                    loss_pitch_gaze = criterion(pitch, label_pitch_gaze)
+                    loss_yaw_gaze = criterion(yaw, label_yaw_gaze)
+
+                    # MSE loss
+                    pitch_predicted = softmax(pitch)
+                    yaw_predicted = softmax(yaw)
+
+                    pitch_predicted = \
+                        torch.sum(pitch_predicted * idx_tensor, 1) * 3 - 42
+                    yaw_predicted = \
+                        torch.sum(yaw_predicted * idx_tensor, 1) * 3 - 42
+
+                    loss_reg_pitch = reg_criterion(
+                        pitch_predicted, label_pitch_cont_gaze)
+                    loss_reg_yaw = reg_criterion(
+                        yaw_predicted, label_yaw_cont_gaze)
+
+                    # Total loss
+                    loss_pitch_gaze += alpha * loss_reg_pitch
+                    loss_yaw_gaze += alpha * loss_reg_yaw
+
+                    sum_loss_pitch_gaze += loss_pitch_gaze
+                    sum_loss_yaw_gaze += loss_yaw_gaze
+
+                    loss_seq = [loss_pitch_gaze, loss_yaw_gaze]
+                    grad_seq = \
+                        [torch.tensor(1.0).cuda(gpu) for _ in range(len(loss_seq))]
+
+                    optimizer_gaze.zero_grad(set_to_none=True)
+                    torch.autograd.backward(loss_seq, grad_seq)
+                    optimizer_gaze.step()
+
+                    iter_gaze += 1
+
+                    if (i+1) % 100 == 0:
+                        print('Epoch [%d/%d], Iter [%d/%d] Losses: '
+                            'Gaze Yaw %.4f,Gaze Pitch %.4f' % (
+                                epoch+1,
+                                num_epochs,
+                                i+1,
+                                len(dataset)//batch_size,
+                                sum_loss_pitch_gaze/iter_gaze,
+                                sum_loss_yaw_gaze/iter_gaze
+                            )
+                            )
+
+                
+
+                # Save models at numbered epochs.
+                if epoch % 1 == 0 and epoch < num_epochs:
+                    print('Taking snapshot...',
+                        torch.save(model.state_dict(),
+                                    output+'/fold' + str(fold) +'/'+
+                                    '_epoch_' + str(epoch+1) + '.pkl')
+                        )
+                    
+                    
+
+   

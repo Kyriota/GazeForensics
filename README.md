@@ -1,4 +1,5 @@
 # Gaze Forensics
 Deepfake detection method utilizing gaze information.
 
-WIP. Current results are stored in `Results` folder.
+[Corresponding Paper](https://arxiv.org/abs/2311.07075)
+

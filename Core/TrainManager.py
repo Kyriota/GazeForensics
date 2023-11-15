@@ -1,10 +1,10 @@
 from Models.MainModel import InitModel
 from Models.GazeBackend import GazeBackend
 from Utils.FileOperation import mkdir, fileWalk, ls, fileExist
-from Utils.Visualization import ProgressBar, PlotHistory
+from Utils.Visualization import ProgressBar, PlotHistory, NormalizeImage
 from Preprocess.DatasetClipping import ClipTrainDatasetParallel
 from Core.DatasetLoader import DatasetLoader
-from Core.Loss import TrainLoss, CustomLoss
+from Core.Loss import TrainLoss, smooth_label
 from Config import Config
 
 import torch
@@ -13,9 +13,10 @@ import torch.utils.data as TDM # torch data module
 from torchvision.models.resnet import BasicBlock
 
 import threading
-from datetime import datetime
 import time
 import numpy as np
+from PIL import Image
+from matplotlib import pyplot as plt
 
 
 
@@ -29,7 +30,10 @@ class TrainManager:
         self.current_DS_path = None
         self.output_lock = threading.Lock()
         self.use_gaze = self.config.loss['gaze_weight'] > 0.0
+        self.use_argument = self.config.prep['argument']
+        self.rand_horizontal_flip = self.config.prep['rand_horizontal_flip']
         self.temp_history = None
+        self.lastEpoch = 0
         self.history = {
             'out_loss': [],
             'acc': [],
@@ -37,34 +41,62 @@ class TrainManager:
             'total_loss': [],
             'len_per_epoch': None,
         }
+        self.grad_norm_history = []
 
         # Init the model
         self.model = InitModel(config)
 
-        # Init optimizer, scheduler and loss function
-        self.optimizer = self.optimizer = torch.optim.Adam(
-            self.model.parameters(),
+        # Init optimizer and loss function
+        self.need_backend_opti = not self.model.module.freeze_backend or self.model.module.leaky_dim > 0
+        if self.need_backend_opti:
+            self.backend_optimizer = torch.optim.AdamW(
+                [
+                    {'params': self.model.module.base_model.parameters()},
+                    {'params': self.model.module.gaze_fc.parameters()},
+                ],
+                lr=config.opti['lr'],
+                weight_decay=config.opti['weight_decay']
+            )
+        self.classifier_optimizer = torch.optim.AdamW(
+            [
+                {'params': self.model.module.MHA_Q_fc.parameters()},
+                {'params': self.model.module.MHA_K_fc.parameters()},
+                {'params': self.model.module.MHA_V_fc.parameters()},
+                {'params': self.model.module.multihead_attn.parameters()},
+                {'params': self.model.module.MHA_comp.parameters()},
+                {'params': self.model.module.last_fc.parameters()},
+            ],
             lr=config.opti['lr'],
             weight_decay=config.opti['weight_decay']
         )
-        self.scheduler = torch.optim.lr_scheduler.StepLR(
-            self.optimizer,
-            step_size=config.opti['step_size'],
-            gamma=config.opti['gamma'],
-            last_epoch=-1,
-            verbose=True
+        if self.need_backend_opti:
+            self.backend_scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                self.backend_optimizer,
+                max_lr=config.opti['lr'],
+                pct_start=config.opti['backend_pct_start'],
+                div_factor=config.opti['backend_div_factor'],
+                total_steps=config.train['num_epochs'],
+            )
+        self.classifier_scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            self.classifier_optimizer,
+            max_lr=config.opti['lr'],
+            pct_start=config.opti['classifier_pct_start'],
+            div_factor=config.opti['classifier_div_factor'],
+            total_steps=config.train['num_epochs'],
         )
         if config.loss['loss_func'] == 'standard':
             self.loss = TrainLoss(config.loss)
-        elif config.loss['loss_func'] == 'custom':
-            self.loss = CustomLoss(config.loss)
+        # elif config.loss['loss_func'] == 'custom':
+        #     self.loss = CustomLoss(config.loss)
+        else:
+            raise ValueError('Unknown loss function: ' + config.loss['loss_func'])
 
         # Load checkpoint
         if self.config.model['checkpoint']:
             checkpoint = torch.load(self.config.model['checkpoint'])
             self.model.load_state_dict(checkpoint['state_dict'])
-            self.optimizer.load_state_dict(checkpoint['optimizer'])
-            self.scheduler.load_state_dict(checkpoint['scheduler'])
+            self.lastEpoch = checkpoint['epoch'] + 1
+            self.history = checkpoint['history']
 
         if self.use_gaze:
             # # Init gaze backend
@@ -73,11 +105,32 @@ class TrainManager:
                 [2, 2, 2, 2],
                 emb_dim=self.config.model['emb_dim'],
             )
-            backend_name = 'gazeBackend_' + str(self.config.model['emb_dim']) + '.pkl'
-            state_dict = torch.load(self.config.basic['checkpointDir'] + backend_name)
-            print(self.gaze_backend.load_state_dict(state_dict, strict=False))
+            state_dict = torch.load(self.config.model['gaze_backend_path'])
+            self.train_print(self.gaze_backend.load_state_dict(state_dict, strict=False))
             self.gaze_backend = nn.DataParallel(self.gaze_backend).cuda()
             self.gaze_backend.eval()
+    
+
+    def train_print(self, content, end='\n'):
+        if self.config.train['verbose']:
+            print(content, end=end)
+
+        
+    def init_data_loader(self):
+        self.train_print('[*] Loading dataset from: ' + self.current_DS_path)
+        data_dir_list = [[0 if 'fake' in i else 1, self.current_DS_path + i] for i in fileWalk(self.current_DS_path) if i.endswith('.mp4')]
+        self.data_loader = TDM.DataLoader(
+            DatasetLoader(
+                data_dir_list,
+                self.config.prep['transform'],
+                use_argument=self.use_argument,
+                rand_horizontal_flip=self.rand_horizontal_flip,
+            ),
+            batch_size=self.config.train['batch_size'],
+            shuffle=True,
+            num_workers=self.config.train['num_workers'],
+            pin_memory=False
+        )
     
     
     def train(self):
@@ -114,19 +167,6 @@ class TrainManager:
                 self.config.basic['train_DS_name'] + '_' + \
                 '{:.1%}'.format(self.config.prep['util_percent']) + '_' + \
                 'epoch' + str(epoch)
-
-        
-        def init_data_loader():
-            clippedDataPath = self.current_DS_path
-            print('[*] Loading dataset from: ' + clippedDataPath)
-            data_dir_list = [[0 if 'fake' in i else 1, clippedDataPath + i] for i in fileWalk(clippedDataPath) if i.endswith('.mp4')]
-            self.data_loader = TDM.DataLoader(
-                DatasetLoader(data_dir_list, self.config.prep['transform']),
-                batch_size=self.config.train['batch_size'],
-                shuffle=True,
-                num_workers=self.config.train['num_workers'],
-                pin_memory=True
-            )
 
 
         def train(epoch):
@@ -168,14 +208,31 @@ class TrainManager:
             for sign, frames in self.data_loader:
                 # Convert variables to correct formats and device
                 sign = nn.functional.one_hot(sign.cuda(non_blocking=True), num_classes=2).float()
-                sign_var = torch.autograd.Variable(sign).cuda()
-                frames_var = torch.autograd.Variable(frames.cuda(non_blocking=True)).cuda()
+                sign_var = torch.autograd.Variable(smooth_label(
+                    sign,
+                    self.config.train['smooth_label_alpha'],
+                    self.config.train['smooth_label_beta'],
+                )).cuda()
+                if self.use_argument:
+                    frames_var = torch.autograd.Variable(frames['argument'].cuda(non_blocking=True)).cuda()
+                else:
+                    frames_var = torch.autograd.Variable(frames['standard'].cuda(non_blocking=True)).cuda()
+                
+                # # Debug code: Show frames_var using PIL.Image
+                # for debug_i in range(frames_var.shape[0]):
+                #     for debug_j in range(frames_var[debug_i].shape[0]):
+                #         img = frames_var[debug_i][debug_j].cpu().detach().numpy()
+                #         img = np.transpose(img, (1, 2, 0))
+                #         img = Image.fromarray(NormalizeImage(img))
+                #         img.show()
+                # input()
 
                 output = self.model(frames_var)
 
                 if self.use_gaze:
                     with torch.no_grad():
-                        gazeTarget = self.gaze_backend(frames_var.view(-1, 3, 224, 224))
+                        frames_var_gaze = torch.autograd.Variable(frames['standard'].cuda(non_blocking=True)).cuda()
+                        gazeTarget = self.gaze_backend(frames_var_gaze.view(-1, 3, 224, 224))
                     gazeEmb = self.model.module.gaze_out.view(-1, gazeTarget.shape[1])
 
                 output = {
@@ -190,9 +247,26 @@ class TrainManager:
                 total_loss = self.loss(output, target)
                 acc = get_acc(output['out'][:, :2], sign)
 
-                self.optimizer.zero_grad()
+                if self.need_backend_opti:
+                    self.backend_optimizer.zero_grad()
+                self.classifier_optimizer.zero_grad()
                 total_loss.backward()
-                self.optimizer.step()
+
+                if self.config.opti['enable_grad_clip']:
+                    # Store current gradient norm
+                    grad_norm = 0.0
+                    for p in self.model.parameters():
+                        if p.grad is not None:
+                            grad_norm += p.grad.detach().data.norm(2).item() ** 2
+                    self.grad_norm_history.append(grad_norm ** 0.5)
+
+                    # Get median of recent gradient norm
+                    grad_norm_median = np.median(self.grad_norm_history[-self.config.opti['grad_clip_ref_range']:])
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), grad_norm_median * self.config.opti['grad_clip_mul'])
+
+                if self.need_backend_opti:
+                    self.backend_optimizer.step()
+                self.classifier_optimizer.step()
 
                 save_to_history(
                     float(self.loss.out_loss.cpu().detach()),
@@ -211,7 +285,7 @@ class TrainManager:
                     ) if self.use_gaze else '')
                 )
             
-            print(
+            self.train_print(
                 time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
                 '\n- Mean Out Loss: {:.4f}\n- Mean Acc: {:.4f}'.format(
                     np.mean(self.temp_history['out_loss']),
@@ -236,8 +310,6 @@ class TrainManager:
             checkpoint = {
                 'epoch': epoch,
                 'state_dict': self.model.state_dict(),
-                'optimizer': self.optimizer.state_dict(),
-                'scheduler': self.scheduler.state_dict(),
                 'history': self.history,
                 'config': self.config,
             }
@@ -245,29 +317,27 @@ class TrainManager:
 
         
         # Create the checkpoint directory
-        if self.config.basic['tryID'] is None:
-            self.config.basic['tryID'] = datetime.now().strftime("%y%m%d_%H%M%S")
         if fileExist(self.config.basic['checkpointDir'] + self.config.basic['tryID'] + '/'):
             print('>> ERROR: Checkpoint directory already exists! Please change tryID in config.')
             return -1
         mkdir(self.config.basic['checkpointDir'] + self.config.basic['tryID'] + '/')
         
-        current_folder_name = get_dataset_folder_name(0)
+        current_folder_name = get_dataset_folder_name(self.lastEpoch + 0)
         self.current_DS_path = self.config.prep['tempDir'] + current_folder_name + '/'
         if get_preprocess_condition(0, current_folder_name):
             # Preprocess the training dataset
-            preprocess_thread = get_preprocess_thread(0, self.current_DS_path)
+            preprocess_thread = get_preprocess_thread(self.lastEpoch + 0, self.current_DS_path)
             preprocess_thread.start()
 
             # Wait for the first preprocessing to finish
             preprocess_thread.join()
 
-        init_data_loader()
+        self.init_data_loader()
 
         # Start training
-        for epoch in range(self.config.train['num_epochs']):
+        for epoch in range(self.config.train['num_epochs']-self.lastEpoch):
             
-            dataset_epoch = epoch+1 if self.config.prep['prep_every_epoch'] else 0
+            dataset_epoch = self.lastEpoch+epoch+1 if self.config.prep['prep_every_epoch'] else self.lastEpoch+0
             next_folder_name = get_dataset_folder_name(dataset_epoch)
             preprocess_condition = get_preprocess_condition(dataset_epoch, next_folder_name)
 
@@ -276,25 +346,32 @@ class TrainManager:
                 preprocess_thread = get_preprocess_thread(dataset_epoch, self.config.prep['tempDir'] + next_folder_name + '/')
                 preprocess_thread.start()
 
-            train(epoch)
+            train(self.lastEpoch+epoch)
             extend_history(self.temp_history)
-            save_checkpoint(epoch)
-            PlotHistory(
-                self.history,
-                self.use_gaze,
-                slice_num=100,
-                global_size=0.5,
-            )
-            self.scheduler.step()
+            save_checkpoint(self.lastEpoch+epoch)
+            if self.config.train['verbose']:
+                PlotHistory(
+                    self.history,
+                    self.use_gaze,
+                    slice_num=100,
+                    global_size=0.5,
+                )
+
+            if self.need_backend_opti:
+                self.backend_scheduler.step()
+            self.classifier_scheduler.step()
+            
+            if self.use_gaze:
+                self.loss.gaze_weight_schedule()
 
             if preprocess_condition:
                 # Wait for the preprocessing to finish
                 preprocess_thread.join()
 
-            if epoch != self.config.train['num_epochs'] - 1:
+            if self.lastEpoch+epoch != self.config.train['num_epochs'] - 1:
                 # Reinitialize the data loader
-                self.current_DS_path = self.config.prep['tempDir'] + get_dataset_folder_name(epoch+1) + '/'
-                init_data_loader()
+                self.current_DS_path = self.config.prep['tempDir'] + get_dataset_folder_name(self.lastEpoch+epoch+1) + '/'
+                self.init_data_loader()
             
-        print('\nTraining finished!')
+        self.train_print('\nTraining finished!')
         return 0

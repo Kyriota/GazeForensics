@@ -1,4 +1,4 @@
-from Models.MainModel import FC_block
+from Models.FcBlock import FC_block
 from torch import nn
 
 

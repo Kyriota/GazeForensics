@@ -1,8 +1,9 @@
-import torch
-import gc
 from Config import Config
 from Core.TrainManager import TrainManager
 from Core.EvaluateManager import EvaluateManager
+
+import torch
+import gc
 
 
 
@@ -34,7 +35,7 @@ def Run(config:Config):
         print(
             ' - Loss Type:'.ljust(space) + config.loss['loss_func'],
                 '+ Gaze * {:.2f}'.format(config.loss['gaze_weight']) if config.loss['gaze_weight'] > 0 else '',
-                '+ Bonus * {:.2f}'.format(config.loss['bonus_weight']) if config.loss['bonus_weight'] > 0 else ''
+                # '+ Bonus * {:.2f}'.format(config.loss['bonus_weight']) if config.loss['bonus_weight'] > 0 else ''
         )
         if config.loss['loss_func'] == 'custom':
             print(' ' * space, end='')
@@ -67,11 +68,16 @@ def Run(config:Config):
 
         with ClearCache():
             evaluateManager = EvaluateManager(config)
-            evaluateManager.evaluate(
+            vid_accs, accs, losses = evaluateManager.evaluate(
                 config.basic['checkpointDir'] + config.basic['tryID'] + '/',
                 show_progress=True,
                 show_confusion_mat=True,
             )
-            del evaluateManager
 
-        gc.collect() 
+        gc.collect()
+    
+    if config.test['enable'] and return_state == 0:
+        print('Best vid_acc: {:.4f}'.format(max(vid_accs)))
+        return vid_accs, accs, losses
+
+    return 0, 0, 0

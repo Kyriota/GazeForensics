@@ -7,8 +7,9 @@ def fileWalk(directory):
         for name in files:
             dirList.append(os.path.join(root[len(directory):], name))
     # get rid of '/' in the beginning
-    if dirList[0][0] == '/':
-        dirList = [x[1:] for x in dirList]
+    for i in range(len(dirList)):
+        if dirList[i][0] == '/':
+            dirList[i] = dirList[i][1:]
     return dirList
 
 def ls(directory=None):
