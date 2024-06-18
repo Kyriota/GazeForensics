@@ -1,0 +1,13 @@
+Checkpoints/*
+CheckpointsNew/*
+CheckpointsLegacy/*
+Results/*
+ResultsNew/*
+ResultsLegacy/*
+Debug/*
+.vscode/*
+.ipynb_checkpoints/*
+**/.ipynb_checkpoints/*
+__pycache__/*
+**/__pycache__/*
+GazeForensicsData/*
