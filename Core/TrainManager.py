@@ -274,7 +274,6 @@ class TrainManager:
                         np.mean(self.temp_history['gaze_loss']),
                     ) if self.use_gaze else '')
                 )
-
             self.train_print(
                 time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
                 '\n- Mean Out Loss: {:.4f}\n- Mean Acc: {:.4f}'.format(
@@ -349,7 +348,6 @@ class TrainManager:
             if self.need_backend_opti:
                 self.backend_scheduler.step()
             self.classifier_scheduler.step()
-
             if self.use_gaze:
                 self.loss.gaze_weight_schedule()
 

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torchvision.models.resnet import BasicBlock
+from torchvision.models.resnet import BasicBlock
 
 from Models.Resnet import resnet18
 from Models.FcBlock import FC_block
@@ -81,7 +82,10 @@ class GazeForensics(nn.Module):
             self.save_gaze_out = False
 
         self.leaky_dim = leaky_dim
+        self.leaky_dim = leaky_dim
         self.avg_dim = 512
+        self.gaze_emb_dim = gaze_emb_dim
+        self.total_emb_dim = gaze_emb_dim + leaky_dim
         self.gaze_emb_dim = gaze_emb_dim
         self.total_emb_dim = gaze_emb_dim + leaky_dim
         self.MHA_dim = head_num * dim_per_head
@@ -89,6 +93,7 @@ class GazeForensics(nn.Module):
         self.fpc = 14  # frames per clip
         self.gaze_out = None
         self.softmax = nn.Softmax(dim=1)
+        # self.sigmoid = nn.Sigmoid()
         # self.sigmoid = nn.Sigmoid()
         last_fc_input_size = self.MHA_comp_dim * self.fpc
 

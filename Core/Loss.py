@@ -22,6 +22,13 @@ class TrainLoss:
             self.loss_func = [nn.BCELoss().cuda(), nn.MSELoss().cuda()]
         else:
             self.loss_func = nn.BCELoss().cuda()
+        
+
+
+    def gaze_weight_schedule(self):
+        self.gaze_weight *= self.gaze_gamma
+        print('Adjusting gaze weight to', self.gaze_weight)
+
 
     def gaze_weight_schedule(self):
         self.gaze_weight *= self.gaze_gamma
@@ -38,7 +45,6 @@ class TrainLoss:
         else:
             self.out_loss = self.loss_func(output['out'][:, :2], target['out'])
             loss = self.out_loss
-
         # if self.bonus_weight > 0:
         #     bonus = get_bonus(output['out'], target['out'])
         #     self.bonus_loss = bonus.mean()

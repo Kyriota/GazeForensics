@@ -7,6 +7,40 @@ from ConfigTypes import NormalizationData, ModelMidSizes, TransformType, Normali
 
 rootDir = "/home/kyr/GazeForensicsData/"
 
+normalization_mean = {
+    'Image-Net':    [0.485, 0.456, 0.406],
+    'WDF':          [0.428, 0.338, 0.301],
+}
+normalization_std = {
+    'Image-Net':    [0.229, 0.224, 0.225],
+    'WDF':          [0.241, 0.212, 0.215],
+}
+
+
+class RandomResizeTransforms(object):
+    def __call__(self, img):
+        if random.random() < 0.5:
+            size = random.randint(48, 223)
+            img = img.resize((size, size))
+        return img.resize((224, 224))
+
+
+def get_standard_transform(mean, std):
+    return transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean, std=std)
+    ])
+
+
+def get_argument_transform(mean, std):
+    return transforms.Compose([
+        transforms.RandomResizedCrop((224, 224), scale=(0.7, 1.0), ratio=(0.8, 1.3)),
+        # RandomResizeTransforms(),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean, std=std)
+    ])
 
 class RandomResizeTransforms(object):
     def __call__(self, img):

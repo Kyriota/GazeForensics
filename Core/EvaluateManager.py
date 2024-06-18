@@ -53,6 +53,18 @@ class EvaluateManager:
                     ] for j in np.random.choice(i[2], i[1], replace=False)]
                 data_dir_list.extend(temp_dir_list)
             return data_dir_list
+        
+
+        def natural_keys(text):
+            '''
+            alist.sort(key=natural_keys) sorts in human order
+            http://nedbatchelder.com/blog/200712/human_sorting.html
+            (See Toothy's implementation in the comments)
+            '''
+            def atoi(text):
+                return int(text) if text.isdigit() else text
+            
+            return [atoi(c) for c in re.split(r'(\d+)', text)]
 
         def natural_keys(text):
             '''
@@ -82,6 +94,11 @@ class EvaluateManager:
             num_workers=self.config.test.num_workers,
             pin_memory=True
         )
+    
+
+    def eval_print(self, content, end='\n'):
+        if self.config.test['verbose']:
+            print(content, end=end)
 
     def eval_print(self, content, end='\n'):
         if self.config.test.verbose:
@@ -165,7 +182,6 @@ class EvaluateManager:
                             np.mean(losses),
                             sum(corrects) / len(corrects),
                         ))
-
             self.eval_print('Time:', time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
 
             # Calculate video level accuracy
@@ -225,6 +241,7 @@ class EvaluateManager:
                 ]
             }
             return train_result
+
 
         if checkpoint_path.endswith('.pth'):
             vid_acc, acc, loss, _, detail_vid, detail_seq, vid_auc = single_shot(checkpoint_path)
